@@ -36,9 +36,14 @@ set(SOURCES "audio/audio_codec.cc"
             "device_state_machine.cc"
             "assets.cc"
             "main.cc"
+            "wifi_connect/dns_server.cc"
+            "wifi_connect/ssid_manager.cc"
+            "wifi_connect/wifi_configuration_ap.cc"
+            "wifi_connect/wifi_manager.cc"
+            "wifi_connect/wifi_station.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols")
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "wifi_connect")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
