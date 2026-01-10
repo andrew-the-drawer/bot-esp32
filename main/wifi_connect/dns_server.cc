@@ -90,21 +90,70 @@ void DnsServer::Run() {
             break;
         }
 
-        // Simple DNS response: point all queries to 192.168.4.1
-        buffer[2] |= 0x80;  // Set response flag
-        buffer[3] |= 0x80;  // Set Recursion Available
-        buffer[7] = 1;      // Set answer count to 1
+        // Extract domain name from DNS query to check if it's a captive portal detection domain
+        // DNS query format: header (12 bytes) + question section
+        // We'll parse the domain name to check for captive portal detection domains
+        char domain[256] = {0};
+        int pos = 12;  // Skip DNS header
+        int domain_pos = 0;
 
-        // Add answer section
-        memcpy(&buffer[len], "\xc0\x0c", 2);  // Name pointer
-        len += 2;
-        memcpy(&buffer[len], "\x00\x01\x00\x01\x00\x00\x00\x1c\x00\x04", 10);  // Type, class, TTL, data length
-        len += 10;
-        memcpy(&buffer[len], &gateway_.addr, 4);  // 192.168.4.1
-        len += 4;
-        ESP_LOGI(TAG, "Sending DNS response to %s", inet_ntoa(gateway_.addr));
+        while (pos < len && buffer[pos] != 0 && domain_pos < sizeof(domain) - 1) {
+            int label_len = buffer[pos];
+            if (label_len == 0 || label_len > 63 || pos + label_len >= len) break;
 
-        sendto(fd_, buffer, len, 0, (struct sockaddr *)&client_addr, client_addr_len);
+            if (domain_pos > 0) {
+                domain[domain_pos++] = '.';
+            }
+            memcpy(domain + domain_pos, buffer + pos + 1, label_len);
+            domain_pos += label_len;
+            pos += label_len + 1;
+        }
+        domain[domain_pos] = '\0';
+
+        // Check if this is a captive portal detection domain
+        bool is_captive_portal_domain = false;
+        const char* captive_portal_domains[] = {
+            "connectivitycheck.gstatic.com",  // Android
+            "clients3.google.com",             // Android
+            "captive.apple.com",               // iOS/macOS
+            "www.apple.com",                   // iOS/macOS
+            "www.appleiphonecell.com",        // iOS
+            "msftconnecttest.com",            // Windows
+            "www.msftconnecttest.com",        // Windows
+            "detectportal.firefox.com",       // Firefox
+            NULL
+        };
+
+        for (int i = 0; captive_portal_domains[i] != NULL; i++) {
+            if (strcasecmp(domain, captive_portal_domains[i]) == 0) {
+                is_captive_portal_domain = true;
+                ESP_LOGI(TAG, "Detected captive portal detection domain: %s", domain);
+                break;
+            }
+        }
+
+        // Only redirect non-captive-portal domains to our IP
+        // For captive portal detection domains, we don't respond (let them fail or timeout)
+        // This prevents the captive portal popup
+        if (!is_captive_portal_domain) {
+            // Simple DNS response: point query to 192.168.4.1
+            buffer[2] |= 0x80;  // Set response flag
+            buffer[3] |= 0x80;  // Set Recursion Available
+            buffer[7] = 1;      // Set answer count to 1
+
+            // Add answer section
+            memcpy(&buffer[len], "\xc0\x0c", 2);  // Name pointer
+            len += 2;
+            memcpy(&buffer[len], "\x00\x01\x00\x01\x00\x00\x00\x1c\x00\x04", 10);  // Type, class, TTL, data length
+            len += 10;
+            memcpy(&buffer[len], &gateway_.addr, 4);  // 192.168.4.1
+            len += 4;
+            ESP_LOGI(TAG, "Sending DNS response for %s to %s", domain, inet_ntoa(gateway_.addr));
+
+            sendto(fd_, buffer, len, 0, (struct sockaddr *)&client_addr, client_addr_len);
+        } else {
+            ESP_LOGI(TAG, "Ignoring captive portal detection domain: %s", domain);
+        }
     }
 
     task_handle_ = nullptr;

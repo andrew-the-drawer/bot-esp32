@@ -219,12 +219,28 @@ void WifiConfigurationAp::StartWebServer()
 {
     // Start the web server
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 24;
+    config.max_uri_handlers = 25;
     config.uri_match_fn = httpd_uri_match_wildcard;
     // 5G Network takes longer to connect
     config.recv_wait_timeout = 15;
     config.send_wait_timeout = 15;
     ESP_ERROR_CHECK(httpd_start(&server_, &config));
+
+    // Register a wildcard OPTIONS handler for CORS preflight requests
+    httpd_uri_t options_handler = {
+        .uri = "/*",
+        .method = HTTP_OPTIONS,
+        .handler = [](httpd_req_t *req) -> esp_err_t {
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+            httpd_resp_set_status(req, "204 No Content");
+            httpd_resp_send(req, NULL, 0);
+            return ESP_OK;
+        },
+        .user_ctx = NULL
+    };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &options_handler));
 
     // Root endpoint - return simple JSON response
     httpd_uri_t root = {
@@ -232,6 +248,7 @@ void WifiConfigurationAp::StartWebServer()
         .method = HTTP_GET,
         .handler = [](httpd_req_t *req) -> esp_err_t {
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "{\"message\":\"WiFi Configuration API\"}", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
@@ -255,6 +272,7 @@ void WifiConfigurationAp::StartWebServer()
             }
             json_str += "]";
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, json_str.c_str(), HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
@@ -278,6 +296,7 @@ void WifiConfigurationAp::StartWebServer()
             }
             // send {}
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "{}", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
@@ -301,6 +320,7 @@ void WifiConfigurationAp::StartWebServer()
             }
             // send {}
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "{}", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
@@ -325,6 +345,7 @@ void WifiConfigurationAp::StartWebServer()
 
             // Send the scan results as JSON
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_sendstr_chunk(req, "{\"support_5g\":");
             httpd_resp_sendstr_chunk(req, support_5g ? "true" : "false");
@@ -413,6 +434,7 @@ void WifiConfigurationAp::StartWebServer()
             cJSON_Delete(json);
             // 设置成功响应
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "{\"success\":true}", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
@@ -428,9 +450,10 @@ void WifiConfigurationAp::StartWebServer()
         .method = HTTP_POST,
         .handler = [](httpd_req_t *req) -> esp_err_t {
             auto* this_ = static_cast<WifiConfigurationAp*>(req->user_ctx);
-            
+
             // 设置响应头，防止浏览器缓存
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Cache-Control", "no-store");
             httpd_resp_set_hdr(req, "Connection", "close");
             // 发送响应
@@ -464,6 +487,7 @@ void WifiConfigurationAp::StartWebServer()
         // Android captive portal detection
         if (strstr(uri, "generate_204") != NULL) {
             httpd_resp_set_status(req, "204 No Content");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, NULL, 0);
             return ESP_OK;
@@ -472,6 +496,7 @@ void WifiConfigurationAp::StartWebServer()
         // Windows NCSI detection
         if (strstr(uri, "ncsi.txt") != NULL) {
             httpd_resp_set_type(req, "text/plain");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "Microsoft NCSI", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
@@ -480,6 +505,7 @@ void WifiConfigurationAp::StartWebServer()
         // Apple, Firefox, and other detection endpoints
         // Return 200 OK with success content
         httpd_resp_set_type(req, "text/html");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         httpd_resp_set_hdr(req, "Connection", "close");
         httpd_resp_send(req, "<html><body>Success</body></html>", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
@@ -541,6 +567,7 @@ void WifiConfigurationAp::StartWebServer()
             }
 
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, json_str, strlen(json_str));
             free(json_str);
@@ -658,6 +685,7 @@ void WifiConfigurationAp::StartWebServer()
 
             // 发送成功响应
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "{\"success\":true}", HTTPD_RESP_USE_STRLEN);
 
