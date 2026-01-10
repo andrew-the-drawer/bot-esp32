@@ -24,8 +24,7 @@
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 
-extern const char index_html_start[] asm("_binary_wifi_configuration_html_start");
-extern const char done_html_start[] asm("_binary_wifi_configuration_done_html_start");
+// HTML files removed - no longer serving HTML pages
 
 WifiConfigurationAp::WifiConfigurationAp()
 {
@@ -227,18 +226,19 @@ void WifiConfigurationAp::StartWebServer()
     config.send_wait_timeout = 15;
     ESP_ERROR_CHECK(httpd_start(&server_, &config));
 
-    // Register the index.html file
-    httpd_uri_t index_html = {
+    // Root endpoint - return simple JSON response
+    httpd_uri_t root = {
         .uri = "/",
         .method = HTTP_GET,
         .handler = [](httpd_req_t *req) -> esp_err_t {
+            httpd_resp_set_type(req, "application/json");
             httpd_resp_set_hdr(req, "Connection", "close");
-            httpd_resp_send(req, index_html_start, strlen(index_html_start));
+            httpd_resp_send(req, "{\"message\":\"WiFi Configuration API\"}", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         },
         .user_ctx = NULL
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &index_html));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &root));
 
     // Register the /saved/list URI
     httpd_uri_t saved_list = {
@@ -421,18 +421,6 @@ void WifiConfigurationAp::StartWebServer()
     };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &form_submit));
 
-    // Register the done.html page
-    httpd_uri_t done_html = {
-        .uri = "/done.html",
-        .method = HTTP_GET,
-        .handler = [](httpd_req_t *req) -> esp_err_t {
-            httpd_resp_set_hdr(req, "Connection", "close");
-            httpd_resp_send(req, done_html_start, strlen(done_html_start));
-            return ESP_OK;
-        },
-        .user_ctx = NULL
-    };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &done_html));
 
     // Register the exit endpoint - exits config mode without rebooting
     httpd_uri_t exit_config = {
@@ -468,15 +456,32 @@ void WifiConfigurationAp::StartWebServer()
     };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &exit_config));
 
+    // Captive portal detection endpoints - return success responses instead of redirects
+    // This allows devices to connect without going through a captive portal
     auto captive_portal_handler = [](httpd_req_t *req) -> esp_err_t {
-        auto *this_ = static_cast<WifiConfigurationAp *>(req->user_ctx);
-        std::string url = this_->GetWebServerUrl() + "/?lang=" + this_->language_ + "&_=" + std::to_string(esp_timer_get_time());
-        // Set content type to prevent browser warnings
+        const char* uri = req->uri;
+
+        // Android captive portal detection
+        if (strstr(uri, "generate_204") != NULL) {
+            httpd_resp_set_status(req, "204 No Content");
+            httpd_resp_set_hdr(req, "Connection", "close");
+            httpd_resp_send(req, NULL, 0);
+            return ESP_OK;
+        }
+
+        // Windows NCSI detection
+        if (strstr(uri, "ncsi.txt") != NULL) {
+            httpd_resp_set_type(req, "text/plain");
+            httpd_resp_set_hdr(req, "Connection", "close");
+            httpd_resp_send(req, "Microsoft NCSI", HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
+
+        // Apple, Firefox, and other detection endpoints
+        // Return 200 OK with success content
         httpd_resp_set_type(req, "text/html");
-        httpd_resp_set_status(req, "302 Found");
-        httpd_resp_set_hdr(req, "Location", url.c_str());
         httpd_resp_set_hdr(req, "Connection", "close");
-        httpd_resp_send(req, NULL, 0);
+        httpd_resp_send(req, "<html><body>Success</body></html>", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
     };
 
@@ -495,13 +500,13 @@ void WifiConfigurationAp::StartWebServer()
     };
 
     for (const auto& url : captive_portal_urls) {
-        httpd_uri_t redirect_uri = {
+        httpd_uri_t detection_uri = {
             .uri = url,
             .method = HTTP_GET,
             .handler = captive_portal_handler,
             .user_ctx = this
         };
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &redirect_uri));
+        ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &detection_uri));
     }
 
     // Register the /advanced/config URI
