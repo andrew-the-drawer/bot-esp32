@@ -5,6 +5,7 @@
 #include "audio_codec.h"
 #include "mqtt_protocol.h"
 #include "websocket_protocol.h"
+#include "test_protocol.h"
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "assets.h"
@@ -473,14 +474,18 @@ void Application::InitializeProtocol() {
 
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
 
-    if (ota_->HasMqttConfig()) {
-        protocol_ = std::make_unique<MqttProtocol>();
-    } else if (ota_->HasWebsocketConfig()) {
-        protocol_ = std::make_unique<WebsocketProtocol>();
-    } else {
-        ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
-        protocol_ = std::make_unique<MqttProtocol>();
-    }
+    // Using TestProtocol for testing
+    protocol_ = std::make_unique<TestProtocol>();
+
+    // Original protocol selection logic (commented out for testing)
+    // if (ota_->HasMqttConfig()) {
+    //     protocol_ = std::make_unique<MqttProtocol>();
+    // } else if (ota_->HasWebsocketConfig()) {
+    //     protocol_ = std::make_unique<WebsocketProtocol>();
+    // } else {
+    //     ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
+    //     protocol_ = std::make_unique<MqttProtocol>();
+    // }
 
     protocol_->OnConnected([this]() {
         DismissAlert();
