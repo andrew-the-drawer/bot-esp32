@@ -9,7 +9,6 @@
 #include <freertos/event_groups.h>
 #include <opus_decoder.h>
 #include <opus_encoder.h>
-#include "audio/mp3_decoder.h"
 
 #include <functional>
 #include <string>
@@ -48,8 +47,7 @@ private:
     // Opus decoder for converting incoming Opus packets to PCM
     std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
 
-    // MP3 decoder and Opus encoder for TTS response conversion
-    std::unique_ptr<Mp3Decoder> mp3_decoder_;
+    // Opus encoder for TTS response conversion
     std::unique_ptr<OpusEncoderWrapper> opus_encoder_;
 
     // Audio processing thread
@@ -79,9 +77,6 @@ private:
 
     // Helper for HTTP requests
     std::unique_ptr<Http> CreateHttpClient();
-
-    // Convert MP3 audio to Opus-encoded packets
-    bool ConvertMp3ToOpus(const std::vector<uint8_t>& mp3_data, std::vector<uint8_t>& opus_data);
 };
 
 #endif // TEST_PROTOCOL_H

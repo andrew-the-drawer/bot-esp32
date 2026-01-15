@@ -107,3 +107,4 @@ dependencies:
   idf:
     version: '>=5.4.0'
   espressif/esp_lcd_touch_st7123: ^1.0.0
+  espressif/esp_audio_codec: ^2.4.1

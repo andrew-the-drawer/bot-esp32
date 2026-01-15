@@ -6,6 +6,8 @@
 #include <esp_log.h>
 #include <cstring>
 #include <sstream>
+#include <esp_audio_simple_dec.h>
+#include <esp_audio_simple_dec_default.h>
 
 #define TAG "TestProtocol"
 
@@ -15,8 +17,6 @@ TestProtocol::TestProtocol() {
     // Initialize Opus decoder for 16kHz mono audio with 60ms frame duration
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(16000, 1, 60);
 
-    // Initialize MP3 decoder and Opus encoder for TTS response conversion
-    mp3_decoder_ = std::make_unique<Mp3Decoder>();
     // Opus encoder: 24kHz mono (common TTS output rate), 60ms frame duration
     opus_encoder_ = std::make_unique<OpusEncoderWrapper>(24000, 1, 60);
 
@@ -424,28 +424,151 @@ bool TestProtocol::SendTTSRequest(const std::string& text, std::vector<uint8_t>&
         return false;
     }
 
-    // Read binary audio data (MP3 format) using buffered read
-    const size_t BUFFER_SIZE = 60000;
-    std::vector<uint8_t> mp3_data;
-    char buffer[BUFFER_SIZE];
+    // Stream and decode MP3 data directly instead of accumulating all data first
+    esp_audio_err_t ret;
 
-    while (true) {
-        int bytes_read = http->Read(buffer, BUFFER_SIZE);
-        if (bytes_read <= 0) {
-            break;
-        }
-        mp3_data.insert(mp3_data.end(), buffer, buffer + bytes_read);
-    }
-
-    ESP_LOGI(TAG, "TTS MP3 response received: %d bytes", mp3_data.size());
-    http->Close();
-    if (!ConvertMp3ToOpus(mp3_data, audio_data)) {
-        ESP_LOGE(TAG, "Failed to convert MP3 to Opus");
+    // Register default simple decoders
+    ret = esp_audio_simple_dec_register_default();
+    if (ret != ESP_AUDIO_ERR_OK) {
+        ESP_LOGE(TAG, "Failed to register audio decoders");
+        http->Close();
         return false;
     }
 
+    // Configure MP3 decoder
+    esp_audio_simple_dec_cfg_t dec_cfg = {
+        .dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_MP3,
+        .dec_cfg = NULL,
+        .cfg_size = 0,
+        .use_frame_dec = false,
+    };
+
+    esp_audio_simple_dec_handle_t decoder = NULL;
+    ret = esp_audio_simple_dec_open(&dec_cfg, &decoder);
+    if (ret != ESP_AUDIO_ERR_OK || decoder == NULL) {
+        ESP_LOGE(TAG, "Failed to open MP3 decoder");
+        http->Close();
+        return false;
+    }
+
+    // Prepare buffers for streaming decode
+    const size_t INPUT_BUFFER_SIZE = 4096;
+    const size_t OUTPUT_BUFFER_SIZE = 8192;
+    uint8_t* in_buf = (uint8_t*)malloc(INPUT_BUFFER_SIZE);
+    uint8_t* out_buf = (uint8_t*)malloc(OUTPUT_BUFFER_SIZE);
+
+    if (!in_buf || !out_buf) {
+        ESP_LOGE(TAG, "Failed to allocate decoder buffers");
+        free(in_buf);
+        free(out_buf);
+        esp_audio_simple_dec_close(decoder);
+        http->Close();
+        return false;
+    }
+
+    std::vector<int16_t> pcm_data;
+    int sample_rate = 0;
+    int channels = 0;
+    int bits_per_sample = 0;
+    bool info_retrieved = false;
+    size_t total_mp3_bytes = 0;
+
+    // Stream MP3 data from HTTP and decode in chunks
+    while (true) {
+        int bytes_read = http->Read((char*)in_buf, INPUT_BUFFER_SIZE);
+        if (bytes_read <= 0) {
+            break;
+        }
+
+        total_mp3_bytes += bytes_read;
+
+        esp_audio_simple_dec_raw_t raw = {
+            .buffer = in_buf,
+            .len = bytes_read,
+            .eos = false,  // We don't know if this is the end yet
+        };
+
+        esp_audio_simple_dec_out_t out_frame = {
+            .buffer = out_buf,
+            .len = OUTPUT_BUFFER_SIZE,
+        };
+
+        ret = esp_audio_simple_dec_process(decoder, &raw, &out_frame);
+
+        if (ret == ESP_AUDIO_ERR_OK && out_frame.decoded_size > 0) {
+            // Get audio info after first successful decode
+            if (!info_retrieved) {
+                esp_audio_simple_dec_info_t dec_info = {};
+                ret = esp_audio_simple_dec_get_info(decoder, &dec_info);
+                if (ret == ESP_AUDIO_ERR_OK) {
+                    sample_rate = dec_info.sample_rate;
+                    channels = dec_info.channel;
+                    bits_per_sample = dec_info.bits_per_sample;
+                    info_retrieved = true;
+                    ESP_LOGI(TAG, "MP3 format: %d Hz, %d channels, %d bits",
+                             sample_rate, channels, bits_per_sample);
+                }
+            }
+
+            // Append decoded PCM data (assuming 16-bit samples)
+            int16_t* samples = (int16_t*)out_frame.buffer;
+            size_t num_samples = out_frame.decoded_size / sizeof(int16_t);
+            pcm_data.insert(pcm_data.end(), samples, samples + num_samples);
+        }
+    }
+
+    ESP_LOGI(TAG, "TTS MP3 response received: %d bytes, decoded to %d PCM samples",
+             total_mp3_bytes, pcm_data.size());
+
+    // Cleanup decoder resources
+    free(in_buf);
+    free(out_buf);
+    esp_audio_simple_dec_close(decoder);
+    http->Close();
+
+    if (pcm_data.empty()) {
+        ESP_LOGE(TAG, "No PCM data decoded from streamed MP3");
+        return false;
+    }
+
+    // Convert stereo to mono if needed
+    std::vector<int16_t> mono_pcm;
+    if (channels == 2) {
+        mono_pcm.reserve(pcm_data.size() / 2);
+        for (size_t i = 0; i < pcm_data.size(); i += 2) {
+            // Average left and right channels
+            int32_t mixed = (static_cast<int32_t>(pcm_data[i]) + static_cast<int32_t>(pcm_data[i + 1])) / 2;
+            mono_pcm.push_back(static_cast<int16_t>(mixed));
+        }
+        ESP_LOGI(TAG, "Converted stereo to mono: %d samples", mono_pcm.size());
+    } else {
+        mono_pcm = std::move(pcm_data);
+    }
+
+    // Reinitialize encoder with correct sample rate if needed
+    int encoder_sample_rate = sample_rate;
+    int frame_duration_ms = 60;
+
+    if (opus_encoder_->sample_rate() != encoder_sample_rate) {
+        ESP_LOGI(TAG, "Reinitializing Opus encoder for %d Hz", encoder_sample_rate);
+        opus_encoder_ = std::make_unique<OpusEncoderWrapper>(encoder_sample_rate, 1, frame_duration_ms);
+    }
+
+    // Encode PCM to Opus frames
+    audio_data.clear();
+    opus_encoder_->ResetState();
+
+    // Encode frames using the callback-based encoder
+    opus_encoder_->Encode(std::move(mono_pcm), [&audio_data](std::vector<uint8_t>&& opus_frame) {
+        // Append each encoded frame with a 2-byte length prefix for framing
+        uint16_t frame_len = opus_frame.size();
+        audio_data.push_back(frame_len & 0xFF);
+        audio_data.push_back((frame_len >> 8) & 0xFF);
+        audio_data.insert(audio_data.end(), opus_frame.begin(), opus_frame.end());
+    });
+
     ESP_LOGI(TAG, "TTS audio converted to Opus: %d bytes", audio_data.size());
-    return true;
+    return !audio_data.empty();
 }
 
 bool TestProtocol::SendText(const std::string& text) {
@@ -526,65 +649,6 @@ bool TestProtocol::OpenAudioChannel() {
 
 bool TestProtocol::IsAudioChannelOpened() const {
     return audio_channel_opened_ && !error_occurred_ && !IsTimeout();
-}
-
-bool TestProtocol::ConvertMp3ToOpus(const std::vector<uint8_t>& mp3_data, std::vector<uint8_t>& opus_data) {
-    // Step 1: Decode MP3 to PCM
-    std::vector<int16_t> pcm_data;
-    int sample_rate = 0;
-    int channels = 0;
-
-    if (!mp3_decoder_->Decode(mp3_data, pcm_data, sample_rate, channels)) {
-        ESP_LOGE(TAG, "Failed to decode MP3");
-        return false;
-    }
-
-    ESP_LOGI(TAG, "Decoded MP3: %d samples, %d Hz, %d channels",
-             pcm_data.size(), sample_rate, channels);
-
-    // Step 2: Convert stereo to mono if needed
-    std::vector<int16_t> mono_pcm;
-    if (channels == 2) {
-        mono_pcm.reserve(pcm_data.size() / 2);
-        for (size_t i = 0; i < pcm_data.size(); i += 2) {
-            // Average left and right channels
-            int32_t mixed = (static_cast<int32_t>(pcm_data[i]) + static_cast<int32_t>(pcm_data[i + 1])) / 2;
-            mono_pcm.push_back(static_cast<int16_t>(mixed));
-        }
-        ESP_LOGI(TAG, "Converted stereo to mono: %d samples", mono_pcm.size());
-    } else {
-        mono_pcm = std::move(pcm_data);
-    }
-
-    // Step 3: Resample if needed (if MP3 sample rate differs from encoder's expected rate)
-    // For simplicity, we'll reinitialize the encoder with the actual sample rate
-    // Note: The encoder is set to 24kHz, common TTS outputs are 22050Hz, 24000Hz, or 44100Hz
-    // For now, we'll use the decoded sample rate directly
-    int encoder_sample_rate = sample_rate;
-    int frame_duration_ms = 60;
-    int frame_size = encoder_sample_rate * frame_duration_ms / 1000;  // samples per frame
-
-    // Recreate encoder with correct sample rate if needed
-    if (opus_encoder_->sample_rate() != encoder_sample_rate) {
-        ESP_LOGI(TAG, "Reinitializing Opus encoder for %d Hz", encoder_sample_rate);
-        opus_encoder_ = std::make_unique<OpusEncoderWrapper>(encoder_sample_rate, 1, frame_duration_ms);
-    }
-
-    // Step 4: Encode PCM to Opus frames
-    opus_data.clear();
-    opus_encoder_->ResetState();
-
-    // Encode frames using the callback-based encoder
-    opus_encoder_->Encode(std::move(mono_pcm), [&opus_data](std::vector<uint8_t>&& opus_frame) {
-        // Append each encoded frame with a 2-byte length prefix for framing
-        uint16_t frame_len = opus_frame.size();
-        opus_data.push_back(frame_len & 0xFF);
-        opus_data.push_back((frame_len >> 8) & 0xFF);
-        opus_data.insert(opus_data.end(), opus_frame.begin(), opus_frame.end());
-    });
-
-    ESP_LOGI(TAG, "Encoded to Opus: %d bytes total", opus_data.size());
-    return !opus_data.empty();
 }
 
 std::unique_ptr<Http> TestProtocol::CreateHttpClient() {
