@@ -34,7 +34,7 @@ void AudioService::Initialize(AudioCodec* codec) {
     codec_->Start();
 
     /* Setup the audio codec */
-    opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
+    opus_decoder_ = std::make_unique<OpusDecoderWrapper>(24000, 1, OPUS_FRAME_DURATION_MS);
     opus_encoder_ = std::make_unique<OpusEncoderWrapper>(16000, 1, OPUS_FRAME_DURATION_MS);
     opus_encoder_->SetComplexity(0);
 
@@ -315,22 +315,34 @@ void AudioService::OpusCodecTask() {
             task->type = kAudioTaskTypeDecodeToPlaybackQueue;
             task->timestamp = packet->timestamp;
 
-            SetDecodeSampleRate(packet->sample_rate, packet->frame_duration);
-            if (opus_decoder_->Decode(std::move(packet->payload), task->pcm)) {
-                // Resample if the sample rate is different
-                if (opus_decoder_->sample_rate() != codec_->output_sample_rate()) {
-                    int target_size = output_resampler_.GetOutputSamples(task->pcm.size());
-                    std::vector<int16_t> resampled(target_size);
-                    output_resampler_.Process(task->pcm.data(), task->pcm.size(), resampled.data());
-                    task->pcm = std::move(resampled);
-                }
+            // Check if PCM data is already available (skip Opus decoding)
+            if (!packet->pcm_data.empty()) {
+                task->pcm = std::move(packet->pcm_data);
 
                 lock.lock();
+                ESP_LOGI(TAG, "Using direct PCM data, pushing to playback queue");
                 audio_playback_queue_.push_back(std::move(task));
                 audio_queue_cv_.notify_all();
             } else {
-                ESP_LOGE(TAG, "Failed to decode audio");
                 lock.lock();
+                // SetDecodeSampleRate(packet->sample_rate, packet->frame_duration);
+                // if (opus_decoder_->Decode(std::move(packet->payload), task->pcm)) {
+                //     // Resample if the sample rate is different
+                //     if (opus_decoder_->sample_rate() != codec_->output_sample_rate()) {
+                //         int target_size = output_resampler_.GetOutputSamples(task->pcm.size());
+                //         std::vector<int16_t> resampled(target_size);
+                //         output_resampler_.Process(task->pcm.data(), task->pcm.size(), resampled.data());
+                //         task->pcm = std::move(resampled);
+                //     }
+
+                //     lock.lock();
+                //     ESP_LOGI(TAG, "Decoded audio packet, pushing to playback queue");
+                //     audio_playback_queue_.push_back(std::move(task));
+                //     audio_queue_cv_.notify_all();
+                // } else {
+                //     ESP_LOGE(TAG, "Failed to decode audio");
+                //     lock.lock();
+                // }
             }
             debug_statistics_.decode_count++;
         }
@@ -411,13 +423,13 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
 
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-    if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
-        if (wait) {
-            audio_queue_cv_.wait(lock, [this]() { return audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE; });
-        } else {
-            return false;
-        }
-    }
+    // if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
+    //     if (wait) {
+    //         audio_queue_cv_.wait(lock, [this]() { return audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE; });
+    //     } else {
+    //         return false;
+    //     }
+    // }
     audio_decode_queue_.push_back(std::move(packet));
     audio_queue_cv_.notify_all();
     return true;
@@ -483,7 +495,7 @@ void AudioService::EnableVoiceProcessing(bool enable) {
         }
 
         /* We should make sure no audio is playing */
-        ResetDecoder();
+        // ResetDecoder();
         audio_input_need_warmup_ = true;
         audio_processor_->Start();
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);

@@ -6,8 +6,7 @@
 #include <esp_log.h>
 #include <cstring>
 #include <sstream>
-#include <esp_audio_simple_dec.h>
-#include <esp_audio_simple_dec_default.h>
+#include <esp_mp3_dec.h>
 
 #define TAG "TestProtocol"
 
@@ -16,9 +15,6 @@ TestProtocol::TestProtocol() {
 
     // Initialize Opus decoder for 16kHz mono audio with 60ms frame duration
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(16000, 1, 60);
-
-    // Opus encoder: 24kHz mono (common TTS output rate), 60ms frame duration
-    opus_encoder_ = std::make_unique<OpusEncoderWrapper>(24000, 1, 60);
 
     // Initialize authentication timer to re-authenticate every 30 minutes
     esp_timer_create_args_t auth_timer_args = {
@@ -379,7 +375,7 @@ bool TestProtocol::SendChatRequest(const std::string& message, std::string& resp
     return false;
 }
 
-bool TestProtocol::SendTTSRequest(const std::string& text, std::vector<uint8_t>& audio_data) {
+bool TestProtocol::SendTTSRequest(const std::string& text) {
     if (!authenticated_) {
         ESP_LOGE(TAG, "Not authenticated");
         return false;
@@ -424,36 +420,30 @@ bool TestProtocol::SendTTSRequest(const std::string& text, std::vector<uint8_t>&
         return false;
     }
 
-    // Stream and decode MP3 data directly instead of accumulating all data first
+    // Stream and decode MP3 data using chunked reading with carryover buffer
     esp_audio_err_t ret;
 
-    // Register default simple decoders
-    ret = esp_audio_simple_dec_register_default();
-    if (ret != ESP_AUDIO_ERR_OK) {
-        ESP_LOGE(TAG, "Failed to register audio decoders");
-        http->Close();
-        return false;
-    }
-
-    // Configure MP3 decoder
-    esp_audio_simple_dec_cfg_t dec_cfg = {
-        .dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_MP3,
-        .dec_cfg = NULL,
-        .cfg_size = 0,
-        .use_frame_dec = false,
-    };
-
-    esp_audio_simple_dec_handle_t decoder = NULL;
-    ret = esp_audio_simple_dec_open(&dec_cfg, &decoder);
+    // Open MP3 decoder
+    void* decoder = NULL;
+    ret = esp_mp3_dec_open(NULL, 0, &decoder);
     if (ret != ESP_AUDIO_ERR_OK || decoder == NULL) {
         ESP_LOGE(TAG, "Failed to open MP3 decoder");
         http->Close();
         return false;
     }
 
-    // Prepare buffers for streaming decode
-    const size_t INPUT_BUFFER_SIZE = 4096;
+    // Buffer sizes - INPUT_BUFFER_SIZE should be large enough for multiple MP3 frames
+    // MP3 frame max size is ~1441 bytes (320kbps at 44.1kHz)
+    // We use a larger buffer to reduce DATA_LACK occurrences
+    const size_t READ_CHUNK_SIZE = 4096;
+    const size_t INPUT_BUFFER_SIZE = 8192;  // Must hold carryover + new data
     const size_t OUTPUT_BUFFER_SIZE = 8192;
+    // Minimum data needed before attempting decode (at least 2 MP3 frames worth)
+    const size_t MIN_DECODE_THRESHOLD = 2048;
+    // PCM buffer size for batching before sending (samples, not bytes)
+    // Using ~60ms worth of audio at common sample rates for memory efficiency
+    const size_t PCM_BUFFER_THRESHOLD = 2880;  // ~60ms at 48kHz or ~120ms at 24kHz
+
     uint8_t* in_buf = (uint8_t*)malloc(INPUT_BUFFER_SIZE);
     uint8_t* out_buf = (uint8_t*)malloc(OUTPUT_BUFFER_SIZE);
 
@@ -461,46 +451,89 @@ bool TestProtocol::SendTTSRequest(const std::string& text, std::vector<uint8_t>&
         ESP_LOGE(TAG, "Failed to allocate decoder buffers");
         free(in_buf);
         free(out_buf);
-        esp_audio_simple_dec_close(decoder);
+        esp_mp3_dec_close(decoder);
         http->Close();
         return false;
     }
 
-    std::vector<int16_t> pcm_data;
+    std::vector<int16_t> pcm_buffer;  // Buffer for accumulating PCM before sending
     int sample_rate = 0;
     int channels = 0;
     int bits_per_sample = 0;
     bool info_retrieved = false;
     size_t total_mp3_bytes = 0;
+    size_t carryover_len = 0;  // Unconsumed bytes from previous iteration
+    size_t total_pcm_samples = 0;
+    size_t packets_sent = 0;
+    bool http_eof = false;  // Track if we've reached end of HTTP stream
 
     // Stream MP3 data from HTTP and decode in chunks
     while (true) {
-        int bytes_read = http->Read((char*)in_buf, INPUT_BUFFER_SIZE);
-        if (bytes_read <= 0) {
+        // Calculate how much space is available in the buffer
+        size_t space_available = INPUT_BUFFER_SIZE - carryover_len;
+        size_t bytes_to_read = (space_available < READ_CHUNK_SIZE) ? space_available : READ_CHUNK_SIZE;
+
+        // Read new data after any carryover bytes
+        int bytes_read = 0;
+        if (!http_eof && bytes_to_read > 0) {
+            bytes_read = http->Read((char*)(in_buf + carryover_len), bytes_to_read);
+            if (bytes_read < 0) {
+                ESP_LOGE(TAG, "HTTP read error");
+                break;
+            }
+            if (bytes_read == 0) {
+                http_eof = true;
+            }
+            total_mp3_bytes += bytes_read;
+        }
+
+        size_t available = carryover_len + bytes_read;
+        if (available == 0) {
+            // No more data
             break;
         }
 
-        total_mp3_bytes += bytes_read;
+        // Only attempt decode if we have enough data, unless this is the final chunk
+        if (available < MIN_DECODE_THRESHOLD && !http_eof) {
+            carryover_len = available;
+            continue;
+        }
 
-        esp_audio_simple_dec_raw_t raw = {
-            .buffer = in_buf,
-            .len = bytes_read,
-            .eos = false,  // We don't know if this is the end yet
-        };
+        // Process all available data in the input buffer
+        uint8_t* raw_ptr = in_buf;
+        uint32_t raw_len = (uint32_t)available;
 
-        esp_audio_simple_dec_out_t out_frame = {
-            .buffer = out_buf,
-            .len = OUTPUT_BUFFER_SIZE,
-        };
+        while (raw_len > 0) {
+            esp_audio_dec_in_raw_t raw = {
+                .buffer = raw_ptr,
+                .len = raw_len,
+                .consumed = 0,
+                .frame_recover = ESP_AUDIO_DEC_RECOVERY_NONE,
+            };
 
-        ret = esp_audio_simple_dec_process(decoder, &raw, &out_frame);
+            esp_audio_dec_out_frame_t out_frame = {
+                .buffer = out_buf,
+                .len = OUTPUT_BUFFER_SIZE,
+                .needed_size = 0,
+                .decoded_size = 0,
+            };
 
-        if (ret == ESP_AUDIO_ERR_OK && out_frame.decoded_size > 0) {
-            // Get audio info after first successful decode
-            if (!info_retrieved) {
-                esp_audio_simple_dec_info_t dec_info = {};
-                ret = esp_audio_simple_dec_get_info(decoder, &dec_info);
-                if (ret == ESP_AUDIO_ERR_OK) {
+            esp_audio_dec_info_t dec_info = {};
+            ret = esp_mp3_dec_decode(decoder, &raw, &out_frame, &dec_info);
+
+            // Handle DATA_LACK: need more input data to complete a frame
+            if (ret == ESP_AUDIO_ERR_DATA_LACK) {
+                // If we haven't reached EOF, break to read more data
+                // If EOF, we've processed all we can
+                // log the current params: carryover_len, raw_len, bytes_read, total_mp3_bytes
+                ESP_LOGW(TAG, "MP3 decode DATA_LACK: carryover_len=%u, raw_len=%u, bytes_read=%d, total_mp3_bytes=%u",
+                         carryover_len, raw_len, bytes_read, total_mp3_bytes);
+                break;
+            }
+
+            if (ret == ESP_AUDIO_ERR_OK && out_frame.decoded_size > 0) {
+                // Get audio info after first successful decode
+                if (!info_retrieved) {
                     sample_rate = dec_info.sample_rate;
                     channels = dec_info.channel;
                     bits_per_sample = dec_info.bits_per_sample;
@@ -508,67 +541,82 @@ bool TestProtocol::SendTTSRequest(const std::string& text, std::vector<uint8_t>&
                     ESP_LOGI(TAG, "MP3 format: %d Hz, %d channels, %d bits",
                              sample_rate, channels, bits_per_sample);
                 }
+
+                // Process decoded PCM data
+                int16_t* samples = (int16_t*)out_frame.buffer;
+                size_t num_samples = out_frame.decoded_size / sizeof(int16_t);
+
+                // Convert stereo to mono inline if needed
+                if (channels == 2) {
+                    for (size_t i = 0; i < num_samples; i += 2) {
+                        int32_t mixed = (static_cast<int32_t>(samples[i]) + static_cast<int32_t>(samples[i + 1])) / 2;
+                        pcm_buffer.push_back(static_cast<int16_t>(mixed));
+                    }
+                } else {
+                    pcm_buffer.insert(pcm_buffer.end(), samples, samples + num_samples);
+                }
+
+                // Send buffered PCM when threshold reached
+                if (pcm_buffer.size() >= PCM_BUFFER_THRESHOLD) {
+                    PlayAudioResponse(pcm_buffer, sample_rate);
+                    total_pcm_samples += pcm_buffer.size();
+                    packets_sent++;
+                    pcm_buffer.clear();
+                }
+            } else if (ret != ESP_AUDIO_ERR_OK && ret != ESP_AUDIO_ERR_DATA_LACK) {
+                // Log non-critical decode errors but continue processing
+                ESP_LOGW(TAG, "MP3 decode warning: %d, consumed: %lu", ret, (unsigned long)raw.consumed);
             }
 
-            // Append decoded PCM data (assuming 16-bit samples)
-            int16_t* samples = (int16_t*)out_frame.buffer;
-            size_t num_samples = out_frame.decoded_size / sizeof(int16_t);
-            pcm_data.insert(pcm_data.end(), samples, samples + num_samples);
+            // Advance input buffer by consumed amount
+            if (raw.consumed > 0) {
+                raw_ptr += raw.consumed;
+                raw_len -= raw.consumed;
+            } else {
+                // No data consumed - need more input data to complete a frame
+                break;
+            }
+        }
+
+        // Move unconsumed data to the beginning of buffer (carryover for next iteration)
+        if (raw_len > 0 && raw_ptr != in_buf) {
+            memmove(in_buf, raw_ptr, raw_len);
+        }
+        carryover_len = raw_len;
+
+        // If we've reached EOF and processed all data, we're done
+        if (http_eof && raw_len == carryover_len && bytes_read == 0) {
+            // Try one more decode attempt for any remaining data
+            if (carryover_len > 0) {
+                // We may have trailing data that can't form a complete frame
+                ESP_LOGD(TAG, "Trailing %u bytes could not be decoded", carryover_len);
+            }
+            break;
         }
     }
 
-    ESP_LOGI(TAG, "TTS MP3 response received: %d bytes, decoded to %d PCM samples",
-             total_mp3_bytes, pcm_data.size());
+    // Send any remaining buffered PCM data
+    if (!pcm_buffer.empty()) {
+        PlayAudioResponse(pcm_buffer, sample_rate);
+        total_pcm_samples += pcm_buffer.size();
+        packets_sent++;
+    }
+
+    ESP_LOGI(TAG, "TTS MP3 received: %u bytes, sent %u PCM samples in %u packets",
+             total_mp3_bytes, total_pcm_samples, packets_sent);
 
     // Cleanup decoder resources
     free(in_buf);
     free(out_buf);
-    esp_audio_simple_dec_close(decoder);
+    esp_mp3_dec_close(decoder);
     http->Close();
 
-    if (pcm_data.empty()) {
+    if (total_pcm_samples == 0) {
         ESP_LOGE(TAG, "No PCM data decoded from streamed MP3");
         return false;
     }
 
-    // Convert stereo to mono if needed
-    std::vector<int16_t> mono_pcm;
-    if (channels == 2) {
-        mono_pcm.reserve(pcm_data.size() / 2);
-        for (size_t i = 0; i < pcm_data.size(); i += 2) {
-            // Average left and right channels
-            int32_t mixed = (static_cast<int32_t>(pcm_data[i]) + static_cast<int32_t>(pcm_data[i + 1])) / 2;
-            mono_pcm.push_back(static_cast<int16_t>(mixed));
-        }
-        ESP_LOGI(TAG, "Converted stereo to mono: %d samples", mono_pcm.size());
-    } else {
-        mono_pcm = std::move(pcm_data);
-    }
-
-    // Reinitialize encoder with correct sample rate if needed
-    int encoder_sample_rate = sample_rate;
-    int frame_duration_ms = 60;
-
-    if (opus_encoder_->sample_rate() != encoder_sample_rate) {
-        ESP_LOGI(TAG, "Reinitializing Opus encoder for %d Hz", encoder_sample_rate);
-        opus_encoder_ = std::make_unique<OpusEncoderWrapper>(encoder_sample_rate, 1, frame_duration_ms);
-    }
-
-    // Encode PCM to Opus frames
-    audio_data.clear();
-    opus_encoder_->ResetState();
-
-    // Encode frames using the callback-based encoder
-    opus_encoder_->Encode(std::move(mono_pcm), [&audio_data](std::vector<uint8_t>&& opus_frame) {
-        // Append each encoded frame with a 2-byte length prefix for framing
-        uint16_t frame_len = opus_frame.size();
-        audio_data.push_back(frame_len & 0xFF);
-        audio_data.push_back((frame_len >> 8) & 0xFF);
-        audio_data.insert(audio_data.end(), opus_frame.begin(), opus_frame.end());
-    });
-
-    ESP_LOGI(TAG, "TTS audio converted to Opus: %d bytes", audio_data.size());
-    return !audio_data.empty();
+    return true;
 }
 
 bool TestProtocol::SendText(const std::string& text) {
@@ -713,57 +761,63 @@ void TestProtocol::ProcessAudioFlow() {
         return;
     }
 
-    ESP_LOGI(TAG, "Chat response: %s", chat_response.c_str());
+    // Notify application that TTS is starting (sets device to speaking state)
+    if (on_incoming_json_ != nullptr) {
+        cJSON* tts_start = cJSON_CreateObject();
+        cJSON_AddStringToObject(tts_start, "type", "tts");
+        cJSON_AddStringToObject(tts_start, "state", "start");
+        on_incoming_json_(tts_start);
+        cJSON_Delete(tts_start);
+    }
 
-    // Step 3: Send chat response to TTS
+    // Send sentence_start with the text to display
+    if (on_incoming_json_ != nullptr) {
+        cJSON* sentence_start = cJSON_CreateObject();
+        cJSON_AddStringToObject(sentence_start, "type", "tts");
+        cJSON_AddStringToObject(sentence_start, "state", "sentence_start");
+        cJSON_AddStringToObject(sentence_start, "text", chat_response.c_str());
+        on_incoming_json_(sentence_start);
+        cJSON_Delete(sentence_start);
+    }
+
+    // Step 3: Send chat response to TTS (audio frames are played directly during encoding)
     // Lock to prevent accumulating audio during TTS
     tts_in_progress_ = true;
 
-    std::vector<uint8_t> tts_audio;
-    bool tts_success = SendTTSRequest(chat_response, tts_audio);
+    bool tts_success = SendTTSRequest(chat_response);
+
+    tts_in_progress_ = false;
+
+    // Notify application that TTS has stopped
+    if (on_incoming_json_ != nullptr) {
+        cJSON* tts_stop = cJSON_CreateObject();
+        cJSON_AddStringToObject(tts_stop, "type", "tts");
+        cJSON_AddStringToObject(tts_stop, "state", "stop");
+        on_incoming_json_(tts_stop);
+        cJSON_Delete(tts_stop);
+    }
 
     if (!tts_success) {
-        tts_in_progress_ = false;
         ESP_LOGE(TAG, "TTS request failed");
         SetError(Lang::Strings::SERVER_ERROR);
         return;
     }
-
-    if (tts_audio.empty()) {
-        tts_in_progress_ = false;
-        ESP_LOGW(TAG, "Empty TTS audio received");
-        return;
-    }
-
-    ESP_LOGI(TAG, "TTS audio received: %d bytes", tts_audio.size());
-
-    // Step 4: Play audio response
-    PlayAudioResponse(tts_audio);
-
-    tts_in_progress_ = false;
 }
 
-void TestProtocol::PlayAudioResponse(const std::vector<uint8_t>& audio_data) {
-    ESP_LOGI(TAG, "Playing audio response: %d bytes", audio_data.size());
-
+void TestProtocol::PlayAudioResponse(const std::vector<int16_t>& pcm_data, int sample_rate) {
     if (on_incoming_audio_ == nullptr) {
         ESP_LOGW(TAG, "No audio callback registered, cannot play audio");
         return;
     }
 
-    // Note: The audio format from TTS is MP3, but the system expects OPUS packets
-    // We need to send this as a single packet and let the audio system handle it
-    // For now, we'll send it as-is and the audio decoder will need to handle MP3 format
-
+    // Send PCM data directly to audio service (bypasses Opus decoding)
     auto packet = std::make_unique<AudioStreamPacket>();
-    packet->sample_rate = server_sample_rate_;
-    packet->frame_duration = server_frame_duration_;
+    packet->sample_rate = sample_rate;
+    packet->frame_duration = 0;  // Not used for PCM
     packet->timestamp = 0;
-    packet->payload = audio_data;
+    packet->pcm_data = pcm_data;
 
     on_incoming_audio_(std::move(packet));
-
-    ESP_LOGI(TAG, "Audio response sent to playback system");
 }
 
 void TestProtocol::StartAudioProcessingThread() {
@@ -777,7 +831,7 @@ void TestProtocol::StartAudioProcessingThread() {
     BaseType_t result = xTaskCreate(
         AudioProcessingTask,
         "audio_proc",
-        8192,  // Stack size
+        8192 * 5,  // Stack size
         this,
         5,     // Priority
         &audio_processing_thread_

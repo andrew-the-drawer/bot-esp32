@@ -232,6 +232,8 @@ int NoAudioCodec::Write(const int16_t* data, int samples) {
         }
     }
 
+    ESP_LOGI(TAG, "Writing %u samples to audio output", samples);
+
     size_t bytes_written;
     ESP_ERROR_CHECK(i2s_channel_write(tx_handle_, buffer.data(), samples * sizeof(int32_t), &bytes_written, portMAX_DELAY));
     return bytes_written / sizeof(int32_t);

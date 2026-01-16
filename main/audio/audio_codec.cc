@@ -15,6 +15,7 @@ AudioCodec::~AudioCodec() {
 }
 
 void AudioCodec::OutputData(std::vector<int16_t>& data) {
+    ESP_LOGI(TAG, "Outputting %u samples to audio codec", data.size());
     Write(data.data(), data.size());
 }
 
