@@ -634,6 +634,15 @@ void AudioService::ResetDecoder() {
     audio_queue_cv_.notify_all();
 }
 
+int AudioService::GetDecodeQueueWaitMs() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    if (audio_decode_queue_.empty()) {
+        return 0;
+    }
+    int frame_duration = audio_decode_queue_.front()->frame_duration;
+    return static_cast<int>(audio_decode_queue_.size()) * frame_duration + 500;
+}
+
 void AudioService::CheckAndUpdateAudioPowerState() {
     auto now = std::chrono::steady_clock::now();
     auto input_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_input_time_).count();

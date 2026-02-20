@@ -526,13 +526,38 @@ void Application::InitializeProtocol() {
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
-                    if (GetDeviceState() == kDeviceStateSpeaking) {
-                        if (listening_mode_ == kListeningModeManualStop) {
-                            SetDeviceState(kDeviceStateIdle);
-                        } else {
-                            SetDeviceState(kDeviceStateListening);
-                        }
+                    if (GetDeviceState() != kDeviceStateSpeaking) {
+                        return;
                     }
+                    if (listening_mode_ == kListeningModeManualStop) {
+                        SetDeviceState(kDeviceStateIdle);
+                        return;
+                    }
+
+                    int wait_ms = audio_service_.GetDecodeQueueWaitMs();
+                    if (wait_ms <= 0) {
+                        SetDeviceState(kDeviceStateListening);
+                        return;
+                    }
+
+                    // Spawn a task to wait for the decode queue to be exhausted,
+                    // then switch to listening mode
+                    struct WaitCtx {
+                        Application* app;
+                        int wait_ms;
+                    };
+                    auto* ctx = new WaitCtx{this, wait_ms};
+                    xTaskCreate([](void* arg) {
+                        auto* ctx = static_cast<WaitCtx*>(arg);
+                        vTaskDelay(pdMS_TO_TICKS(ctx->wait_ms));
+                        ctx->app->Schedule([app = ctx->app]() {
+                            if (app->GetDeviceState() == kDeviceStateSpeaking) {
+                                app->SetDeviceState(kDeviceStateListening);
+                            }
+                        });
+                        delete ctx;
+                        vTaskDelete(NULL);
+                    }, "tts_stop_wait", 2048, ctx, 2, nullptr);
                 });
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
                 auto text = cJSON_GetObjectItem(root, "text");
