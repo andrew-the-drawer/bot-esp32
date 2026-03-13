@@ -5,8 +5,6 @@
 | Peripheral | Chip | Interface |
 |---|---|---|
 | Display | NV3030B (284x240) | SPI3 |
-| Speaker codec | ES8311 + NS4150 (PA) | I2S duplex + I2C |
-| Mic codec | ES7210 | I2S duplex + I2C |
 | Boot button | — | GPIO0 |
 | Volume buttons | — | GPIO39 / GPIO40 |
 | Battery status | — | GPIO38 |
@@ -34,21 +32,6 @@
 | `DISPLAY_OFFSET_X` | 0 |
 | `DISPLAY_OFFSET_Y` | 0 |
 | `DISPLAY_SPI_SCLK_HZ` | 80 MHz |
-
-### Audio — ES8311 (speaker) + ES7210 (mic)
-| Define | GPIO |
-|---|---|
-| `AUDIO_I2S_GPIO_MCLK` | GPIO5 |
-| `AUDIO_I2S_GPIO_WS` | GPIO16 |
-| `AUDIO_I2S_GPIO_BCLK` | GPIO15 |
-| `AUDIO_I2S_GPIO_DIN` | GPIO7 |
-| `AUDIO_I2S_GPIO_DOUT` | GPIO6 |
-| `AUDIO_CODEC_PA_PIN` | GPIO4 |
-| `AUDIO_CODEC_I2C_SDA_PIN` | GPIO12 |
-| `AUDIO_CODEC_I2C_SCL_PIN` | GPIO11 |
-| `AUDIO_INPUT_SAMPLE_RATE` | 24000 |
-| `AUDIO_OUTPUT_SAMPLE_RATE` | 24000 |
-| `AUDIO_INPUT_REFERENCE` | true |
 
 ### Buttons & Power
 | Define | GPIO |
@@ -163,16 +146,6 @@ static const nv3023_lcd_init_cmd_t nv3030b_init_cmds[] = {
 ### Base class
 `WifiBoard` (WiFi only, same as `xingzhi-cube-0.85tft-wifi`).
 
-### Audio codec
-`BoxAudioCodec` — handles ES8311 (DAC/speaker) + ES7210 (ADC/mic) on a single
-shared duplex I2S bus. Constructor signature:
-
-```cpp
-BoxAudioCodec(i2c_bus, input_rate, output_rate,
-              mclk, bclk, ws, dout, din,
-              pa_pin, es8311_addr, es7210_addr, input_reference)
-```
-
 ### Power / sleep pattern
 Identical to `xingzhi-cube-0.85tft-wifi`:
 - `PowerManager(POWER_CHARGE_DETECT_PIN)` for charging detection
@@ -192,28 +165,12 @@ Identical to `xingzhi-cube-0.85tft-wifi`:
 
 ---
 
-## Step 5 — Bringup & Tuning Checklist
-
-- [ ] Verify flash size (16MB assumed)
-- [ ] Confirm LED GPIO (currently `GPIO_NUM_NC`)
-- [ ] Display: tune `MADCTL` (0x36) byte if rotation is wrong
-- [ ] Display: confirm NV3030B init sequence produces a picture (may need vendor
-      adjustments — get updated sequence from D Solution if needed)
-- [ ] Audio: verify ES7210 I2C address (`ES7210_CODEC_DEFAULT_ADDR`)
-- [ ] Audio: verify ES8311 I2C address (`ES8311_CODEC_DEFAULT_ADDR`)
-- [ ] Test volume buttons (GPIO39/40)
-- [ ] Test deep sleep / wake cycle via GPIO21
-
----
-
 ## Reference Boards
 
 | Board | What to borrow |
 |---|---|
 | `xingzhi-cube-0.85tft-wifi` | Power/sleep/NV3023 display init pattern |
 | `aipi-lite` | I2C init, PowerManager + PowerSaveTimer wiring |
-| `movecall-moji-esp32s3` | ES8311 + I2C codec setup |
-| `waveshare-s3-touch-lcd-1.83` | BoxAudioCodec (ES8311 + ES7210) usage |
 
 ## Links
 

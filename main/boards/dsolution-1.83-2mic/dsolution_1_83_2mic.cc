@@ -1,5 +1,5 @@
 #include "wifi_board.h"
-#include "codecs/box_audio_codec.h"
+#include "codecs/no_audio_codec.h"
 #include "display/lcd_display.h"
 #include "system_reset.h"
 #include "application.h"
@@ -12,7 +12,6 @@
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
-#include <driver/i2c_master.h>
 #include <driver/spi_master.h>
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
@@ -22,7 +21,7 @@
 
 #define TAG "DSOLUTION_1_83_2MIC"
 
-// NV3030B init sequence (datasheet v0.6 + standard MIPI DCS)
+//   init sequence (datasheet v0.6 + standard MIPI DCS)
 static const nv3023_lcd_init_cmd_t nv3030b_init_cmds[] = {
     // Unlock private registers
     {0xFD, (uint8_t[]){0x06, 0x08}, 2, 0},
@@ -59,7 +58,6 @@ static const nv3023_lcd_init_cmd_t nv3030b_init_cmds[] = {
 
 class DsolutionBoard : public WifiBoard {
 private:
-    i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_;
     Button volume_up_button_;
     Button volume_down_button_;
@@ -102,19 +100,6 @@ private:
             esp_deep_sleep_start();
         });
         power_save_timer_->SetEnabled(true);
-    }
-
-    void InitializeCodecI2c() {
-        i2c_master_bus_config_t i2c_bus_cfg = {
-            .i2c_port = I2C_NUM_0,
-            .sda_io_num = AUDIO_CODEC_I2C_SDA_PIN,
-            .scl_io_num = AUDIO_CODEC_I2C_SCL_PIN,
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .flags = {
-                .enable_internal_pullup = 1,
-            },
-        };
-        ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
     }
 
     void InitializeSpi() {
@@ -170,7 +155,7 @@ private:
         volume_down_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MIN_VOLUME);
+            GetDisplay()->ShowNotification("0");
         });
     }
 
@@ -217,7 +202,6 @@ public:
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
         InitializePowerManager();
         InitializePowerSaveTimer();
-        InitializeCodecI2c();
         InitializeSpi();
         InitializeButtons();
         InitializeNv3030bDisplay();
@@ -225,19 +209,15 @@ public:
     }
 
     virtual AudioCodec* GetAudioCodec() override {
-        static BoxAudioCodec audio_codec(
-            i2c_bus_,
+        static NoAudioCodecSimplex audio_codec(
             AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
-            AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN,
-            AUDIO_CODEC_ES8311_ADDR,
-            AUDIO_CODEC_ES7210_ADDR,
-            AUDIO_INPUT_REFERENCE);
+            AUDIO_I2S_SPK_GPIO_BCLK,
+            AUDIO_I2S_SPK_GPIO_LRCK,
+            AUDIO_I2S_SPK_GPIO_DOUT,
+            AUDIO_I2S_MIC_GPIO_SCK,
+            AUDIO_I2S_MIC_GPIO_WS,
+            AUDIO_I2S_MIC_GPIO_DIN);
         return &audio_codec;
     }
 
@@ -248,11 +228,6 @@ public:
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
-    }
-
-    virtual Led* GetLed() override {
-        static SingleLed led(GPIO_NUM_NC);
-        return &led;
     }
 
     virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {

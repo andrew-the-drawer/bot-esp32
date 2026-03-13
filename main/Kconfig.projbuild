@@ -363,6 +363,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_DU_CHATX
         bool "嘟嘟开发板CHATX(wifi)"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_DSOLUTION_1_83_2MIC
+        bool "DSolution 1.83 2MIC - Vietnam"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_TAIJI_PI_S3
         bool "太极小派esp32s3"
         depends on IDF_TARGET_ESP32S3
