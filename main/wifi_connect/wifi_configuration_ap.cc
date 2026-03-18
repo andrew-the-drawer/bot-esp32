@@ -17,6 +17,7 @@
 #include <esp_smartconfig.h>
 #endif
 #include "ssid_manager.h"
+#include "settings.h"
 #include "sdkconfig.h"
 
 #define TAG "WifiConfigurationAp"
@@ -431,6 +432,13 @@ void WifiConfigurationAp::StartWebServer()
             }
 
             this_->Save(ssid_str, password_str);
+
+            cJSON *api_key_item = cJSON_GetObjectItemCaseSensitive(json, "apiKey");
+            if (cJSON_IsString(api_key_item) && api_key_item->valuestring != NULL) {
+                Settings auth_settings("auth", true);
+                auth_settings.SetString("api_key", api_key_item->valuestring);
+            }
+
             cJSON_Delete(json);
             // 设置成功响应
             httpd_resp_set_type(req, "application/json");

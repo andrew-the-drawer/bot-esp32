@@ -108,6 +108,12 @@ bool WebsocketProtocol::OpenAudioChannel() {
     websocket_->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     websocket_->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
 
+    Settings auth_settings("auth", false);
+    std::string api_key = auth_settings.GetString("api_key");
+    if (!api_key.empty()) {
+        websocket_->SetHeader("X-Api-Key", api_key.c_str());
+    }
+
     websocket_->OnData([this](const char* data, size_t len, bool binary) {
         if (binary) {
             if (on_incoming_audio_ != nullptr) {

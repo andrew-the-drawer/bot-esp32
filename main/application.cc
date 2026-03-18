@@ -533,6 +533,17 @@ void Application::InitializeProtocol() {
                         SetDeviceState(kDeviceStateIdle);
                         return;
                     }
+                    SetDeviceState(kDeviceStateListening);
+                });
+            } else if (strcmp(state->valuestring, "stop_and_drain") == 0) {
+                Schedule([this]() {
+                    if (GetDeviceState() != kDeviceStateSpeaking) {
+                        return;
+                    }
+                    if (listening_mode_ == kListeningModeManualStop) {
+                        SetDeviceState(kDeviceStateIdle);
+                        return;
+                    }
 
                     int wait_ms = audio_service_.GetDecodeQueueWaitMs();
                     if (wait_ms <= 0) {
