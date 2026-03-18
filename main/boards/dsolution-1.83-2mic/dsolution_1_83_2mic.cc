@@ -56,12 +56,32 @@ static const nv3023_lcd_init_cmd_t nv3030b_init_cmds[] = {
     {0x29, (uint8_t[]){0x00}, 0, 10},  // Display ON
 };
 
+// Dsolution-specific display with UI customizations for rounded screen corners
+class DsolutionSpiLcdDisplay : public SpiLcdDisplay {
+public:
+    DsolutionSpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
+                           int width, int height, int offset_x, int offset_y,
+                           bool mirror_x, bool mirror_y, bool swap_xy)
+        : SpiLcdDisplay(panel_io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y, swap_xy) {
+        DisplayLockGuard lock(this);
+
+        // Battery status: 15px from right edge to avoid cutoff by round corners
+        if (top_bar_ != nullptr) {
+            lv_obj_set_style_pad_right(top_bar_, 15, 0);
+        }
+
+        if (chat_message_label_ != nullptr) {
+            lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+        }
+    }
+};
+
 class DsolutionBoard : public WifiBoard {
 private:
     Button boot_button_;
     Button volume_up_button_;
     Button volume_down_button_;
-    SpiLcdDisplay* display_;
+    DsolutionSpiLcdDisplay* display_;
     PowerSaveTimer* power_save_timer_;
     PowerManager* power_manager_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
@@ -190,7 +210,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, false));
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = new SpiLcdDisplay(panel_io_, panel_,
+        display_ = new DsolutionSpiLcdDisplay(panel_io_, panel_,
             DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
             DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
