@@ -247,11 +247,11 @@ def release(board_type: str, config_filename: str = "config.json", *, filter_nam
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("board", nargs="?", default=None, help="板子类型或 all")
-    parser.add_argument("-c", "--config", default="config.json", help="指定 config 文件名，默认 config.json")
-    parser.add_argument("--list-boards", action="store_true", help="列出所有支持的 board 及变体列表")
-    parser.add_argument("--json", action="store_true", help="配合 --list-boards，JSON 格式输出")
-    parser.add_argument("--name", help="指定变体名称，仅编译匹配的变体")
+    parser.add_argument("board", nargs="?", default=None, help="board type or 'all'")
+    parser.add_argument("-c", "--config", default="config.json", help="config filename (default: config.json)")
+    parser.add_argument("--list-boards", action="store_true", help="list all supported boards and variants")
+    parser.add_argument("--json", action="store_true", help="output in JSON format (use with --list-boards)")
+    parser.add_argument("--name", help="variant name to compile (only matches specified variant)")
 
     args = parser.parse_args()
 

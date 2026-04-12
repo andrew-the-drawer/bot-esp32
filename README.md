@@ -161,6 +161,11 @@ We hope this project helps everyone understand AI hardware development and apply
 
 If you have any ideas or suggestions, please feel free to raise Issues or join the QQ group: 1011329060
 
+## Release Steps for LovieLab:
+
+1. Use VSCode ESP-IDF extension to build
+2. Run `scripts/publish.sh dev|prod` to publish firmware to LovieLab server.
+
 ## Star History
 
 <a href="https://star-history.com/#78/xiaozhi-esp32&Date">
