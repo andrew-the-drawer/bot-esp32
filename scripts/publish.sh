@@ -35,10 +35,17 @@ esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BINARY="$SCRIPT_DIR/../build/merged-binary.bin"
+OTA_BINARY="$SCRIPT_DIR/../build/xiaozhi.bin"
+REMOTE_OTA_PATH="$(dirname "$REMOTE_FIRMWARE_PATH")/ota.bin"
 
 # ─── Validation ───────────────────────────────────────────────────────────────
 if [[ ! -f "$BINARY" ]]; then
   echo "ERROR: Firmware binary not found at $BINARY" >&2
+  exit 1
+fi
+
+if [[ ! -f "$OTA_BINARY" ]]; then
+  echo "ERROR: OTA binary not found at $OTA_BINARY" >&2
   exit 1
 fi
 
@@ -66,11 +73,17 @@ REMOTE_DIR="$(dirname "$REMOTE_FIRMWARE_PATH")"
 echo "==> Ensuring remote directory exists: $REMOTE_DIR"
 ssh "${SSH_OPTS[@]}" "$EC2_OS_USER@$EC2_HOST" "mkdir -p $REMOTE_DIR"
 
-# ─── 3. Copy firmware binary ──────────────────────────────────────────────────
+# ─── 3. Copy firmware binaries ────────────────────────────────────────────────
 echo "==> Copying firmware to $EC2_OS_USER@$EC2_HOST:$REMOTE_FIRMWARE_PATH ..."
 scp "${SSH_OPTS[@]}" \
   "$BINARY" \
   "$EC2_OS_USER@$EC2_HOST:$REMOTE_FIRMWARE_PATH"
 
+echo "==> Copying OTA binary to $EC2_OS_USER@$EC2_HOST:$REMOTE_OTA_PATH ..."
+scp "${SSH_OPTS[@]}" \
+  "$OTA_BINARY" \
+  "$EC2_OS_USER@$EC2_HOST:$REMOTE_OTA_PATH"
+
 echo ""
 echo "==> Done! Firmware published to [$ENV] $EC2_OS_USER@$EC2_HOST:$REMOTE_FIRMWARE_PATH"
+echo "==> Done! OTA binary published to [$ENV] $EC2_OS_USER@$EC2_HOST:$REMOTE_OTA_PATH"

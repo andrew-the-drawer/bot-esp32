@@ -163,8 +163,11 @@ If you have any ideas or suggestions, please feel free to raise Issues or join t
 
 ## Release Steps for LovieLab:
 
-1. Use VSCode ESP-IDF extension to build
-2. Run `scripts/publish.sh dev|prod` to publish firmware to LovieLab server.
+1. Use Vscode ESP-IDF extension to configure and build the project with the right configuration (OTA_URL, board type, language,...)
+2. Use VSCode ESP-IDF extension to open the ESP-IDF terminal
+3. Run `python scripts/release.py` to generate firmware binaries in the `build/` directory
+4. Run `scripts/publish.sh dev|prod` to publish firmware to LovieLab server.
+5. Update the LovieLab main backend configuration to bump the firmware version in the environment variable settings. After that re-deploy the backend container to make the settings change effective.
 
 ## Star History
 

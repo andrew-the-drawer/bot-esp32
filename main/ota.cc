@@ -276,6 +276,13 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(0);
+
+    Settings auth_settings("auth", false);
+    std::string api_key = auth_settings.GetString("api_key");
+    if (!api_key.empty()) {
+        http->SetHeader("X-Api-Key", api_key.c_str());
+    }
+
     if (!http->Open("GET", firmware_url)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection");
         return false;
