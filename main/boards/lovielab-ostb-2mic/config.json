@@ -1,0 +1,14 @@
+{
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "lovielab-ostb-2mic",
+            "sdkconfig_append": [
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m.csv\"",
+                "CONFIG_LOG_DEFAULT_LEVEL_NONE=y",
+                "CONFIG_USE_ACOUSTIC_WIFI_PROVISIONING=y",
+                "CONFIG_USE_DEVICE_AEC=y"
+            ]
+        }
+    ]
+}

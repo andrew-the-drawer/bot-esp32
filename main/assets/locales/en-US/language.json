@@ -29,7 +29,7 @@
         "SERVER_TIMEOUT": "Waiting for response timeout",
         "SERVER_ERROR": "Sending failed, please check the network",
         "CONNECT_TO_HOTSPOT": "Hotspot: ",
-        "ACCESS_VIA_BROWSER": " Config URL: ",
+        "ACCESS_VIA_BROWSER": " Go to LovieLab console web and follow instruction there ",
         "WIFI_CONFIG_MODE": "Wi-Fi Configuration Mode",
         "ENTERING_WIFI_CONFIG_MODE": "Entering Wi-Fi configuration mode...",
         "SCANNING_WIFI": "Scanning Wi-Fi...",
