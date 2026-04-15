@@ -36,7 +36,9 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BINARY="$SCRIPT_DIR/../build/merged-binary.bin"
 OTA_BINARY="$SCRIPT_DIR/../build/xiaozhi.bin"
+FIRMWARE_RELEASE_JSON="$SCRIPT_DIR/../build/firmware-release.json"
 REMOTE_OTA_PATH="$(dirname "$REMOTE_FIRMWARE_PATH")/ota.bin"
+REMOTE_FIRMWARE_RELEASE_JSON_PATH="$(dirname "$REMOTE_FIRMWARE_PATH")/firmware-release.json"
 
 # ─── Validation ───────────────────────────────────────────────────────────────
 if [[ ! -f "$BINARY" ]]; then
@@ -46,6 +48,11 @@ fi
 
 if [[ ! -f "$OTA_BINARY" ]]; then
   echo "ERROR: OTA binary not found at $OTA_BINARY" >&2
+  exit 1
+fi
+
+if [[ ! -f "$FIRMWARE_RELEASE_JSON" ]]; then
+  echo "ERROR: firmware-release.json not found at $FIRMWARE_RELEASE_JSON" >&2
   exit 1
 fi
 
@@ -84,6 +91,12 @@ scp "${SSH_OPTS[@]}" \
   "$OTA_BINARY" \
   "$EC2_OS_USER@$EC2_HOST:$REMOTE_OTA_PATH"
 
+echo "==> Copying firmware-release.json to $EC2_OS_USER@$EC2_HOST:$REMOTE_FIRMWARE_RELEASE_JSON_PATH ..."
+scp "${SSH_OPTS[@]}" \
+  "$FIRMWARE_RELEASE_JSON" \
+  "$EC2_OS_USER@$EC2_HOST:$REMOTE_FIRMWARE_RELEASE_JSON_PATH"
+
 echo ""
 echo "==> Done! Firmware published to [$ENV] $EC2_OS_USER@$EC2_HOST:$REMOTE_FIRMWARE_PATH"
 echo "==> Done! OTA binary published to [$ENV] $EC2_OS_USER@$EC2_HOST:$REMOTE_OTA_PATH"
+echo "==> Done! firmware-release.json published to [$ENV] $EC2_OS_USER@$EC2_HOST:$REMOTE_FIRMWARE_RELEASE_JSON_PATH"

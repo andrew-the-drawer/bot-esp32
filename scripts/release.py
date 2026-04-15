@@ -44,6 +44,13 @@ def merge_bin() -> None:
         sys.exit(1)
 
 
+def write_firmware_release_json(version: str) -> None:
+    """Write build/firmware-release.json with the current release version."""
+    out_path = Path("build/firmware-release.json")
+    out_path.write_text(json.dumps({"version": version}))
+    print(f"wrote {out_path}")
+
+
 def zip_bin(name: str, version: str) -> None:
     """Zip build/merged-binary.bin to releases/v{version}_{name}.zip"""
     out_dir = Path("releases")
@@ -241,6 +248,9 @@ def release(board_type: str, config_filename: str = "config.json", *, filter_nam
         # Zip
         zip_bin(name, project_version)
 
+        # Write firmware-release.json
+        write_firmware_release_json(project_version)
+
 ################################################################################
 # CLI entry
 ################################################################################
@@ -274,6 +284,7 @@ if __name__ == "__main__":
             sys.exit(1)
         project_ver = get_project_version()
         zip_bin(curr_board_type, project_ver)
+        write_firmware_release_json(project_ver)
         sys.exit(0)
 
     # Compile mode
